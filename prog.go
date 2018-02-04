@@ -26,6 +26,7 @@ const basePath = "walls"
 var wg sync.WaitGroup
 
 func main() {
+	rand.Seed(time.Now().UTC().UnixNano())
 	fmt.Print("\nWelcome to the reddit anime wallpaper getter! Get new pictures? (y/n): ")
 	reader := bufio.NewReader(os.Stdin)
 	s, _ := reader.ReadString('\n')
