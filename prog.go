@@ -24,9 +24,16 @@ const redditURL = "https://www.reddit.com/r/Animewallpaper.json?sort=hot&raw_jso
 const basePath = "walls"
 
 var wg sync.WaitGroup
+var win *syscall.LazyProc
+var workingPath string
 
 func main() {
+	workingPath, _ = os.Getwd()
+	win = syscall.NewLazyDLL("user32.dll").NewProc("SystemParametersInfoW")
 	rand.Seed(time.Now().UTC().UnixNano())
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		os.Mkdir(basePath, os.ModeDir)
+	}
 	fmt.Print("\nWelcome to the reddit anime wallpaper getter! Get new pictures? (y/n): ")
 	reader := bufio.NewReader(os.Stdin)
 	s, _ := reader.ReadString('\n')
@@ -49,7 +56,7 @@ func main() {
 	go func(start chan byte) {
 		<-start
 		go func() {
-			for true {
+			for {
 				setDesktop(randFile())
 				time.Sleep(time.Second * 3)
 			}
@@ -167,21 +174,28 @@ func talkToReddit(after string) (*http.Response, error) {
 
 }
 func setDesktop(file string) {
-	file = path.Join("C:/Users/mrfly/OneDrive/Desktop/Workshop/Golang-Wallpaper-Grabber", basePath, file)
+	file = path.Join(workingPath, basePath, file)
 	fileptr, err := syscall.UTF16PtrFromString(file)
 	if err != nil {
 		println(err)
 	}
-	syscall.NewLazyDLL("user32.dll").NewProc("SystemParametersInfoW").Call(
-		uintptr(0x0014),
-		uintptr(0x0000),
-		uintptr(unsafe.Pointer(fileptr)),
-		uintptr(0x01|0x02),
-	)
+	go func() {
+		win.Call(
+			uintptr(0x0014),
+			uintptr(0x0000),
+			uintptr(unsafe.Pointer(fileptr)),
+			uintptr(0x01|0x02),
+		)
+	}()
 
 }
 func randFile() string {
 	files, _ := ioutil.ReadDir(basePath)
+	if len(files) == 0 {
+		fmt.Println("\nNo files in walls, please get more :(")
+		os.Exit(0)
+	}
 	ran := rand.Intn(len(files))
+	println(files[ran].Name())
 	return files[ran].Name()
 }
