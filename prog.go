@@ -152,7 +152,7 @@ func convertLinkToImg(imgurl string) error {
 		}
 		io.Copy(file, res.Body)
 		res.Body.Close()
-		println("Adding:", imgurl)
+		fmt.Println("Adding:", imgurl)
 		return errors.New("file already exists")
 	}
 	return nil
@@ -177,7 +177,7 @@ func setDesktop(file string) {
 	file = path.Join(workingPath, basePath, file)
 	fileptr, err := syscall.UTF16PtrFromString(file)
 	if err != nil {
-		println(err)
+		log.Fatal(err)
 	}
 	go func() {
 		win.Call(
@@ -196,6 +196,5 @@ func randFile() string {
 		os.Exit(0)
 	}
 	ran := rand.Intn(len(files))
-	println(files[ran].Name())
 	return files[ran].Name()
 }
