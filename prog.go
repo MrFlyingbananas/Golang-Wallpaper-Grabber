@@ -23,133 +23,147 @@ import (
 const redditURL = "https://www.reddit.com/r/Animewallpaper.json?sort=hot&raw_json=1"
 const basePath = "walls"
 
-var wg sync.WaitGroup
 var win *syscall.LazyProc
 var workingPath string
+var console *bufio.Reader
+
+const changeIntervalSeconds = 10
+
+func init() {
+	var err error
+
+	workingPath, err = os.Getwd()
+	check(err)
+
+	console = bufio.NewReader(os.Stdin)
+
+	win = syscall.NewLazyDLL("user32.dll").NewProc("SystemParametersInfoW")
+
+	rand.Seed(time.Now().UTC().UnixNano())
+
+	makeBase()
+}
 
 func main() {
-	workingPath, _ = os.Getwd()
-	win = syscall.NewLazyDLL("user32.dll").NewProc("SystemParametersInfoW")
-	rand.Seed(time.Now().UTC().UnixNano())
-	if _, err := os.Stat(basePath); os.IsNotExist(err) {
-		os.Mkdir(basePath, os.ModeDir)
-	}
-	fmt.Print("\nWelcome to the reddit anime wallpaper getter! Get new pictures? (y/n): ")
-	reader := bufio.NewReader(os.Stdin)
-	s, _ := reader.ReadString('\n')
-	ch := s[0]
-	done := make(chan byte)
-	quit := make(chan byte)
-	if ch == 'n' || ch == 'N' {
-		go func(start chan byte) {
-			start <- 0
-		}(done)
-	} else {
-		fmt.Print("Number of pages to scan: ")
-		s, _ := reader.ReadString('\n')
-		i, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil {
-			fmt.Printf("%T, %v", s, s)
+	fmt.Println("Welcome to the reddit anime wallpaper getter!")
+	s, err := getInput("Enter background change interval in minutes: ")
+	check(err)
+	changeInterval, err := strconv.ParseFloat(strings.TrimSpace(s), 32)
+	check(err)
+	go func() {
+		for {
+			setDesktop(randFile())
+			time.Sleep(time.Second * time.Duration(60*changeInterval))
 		}
-		go getPictures(i, done)
+	}()
+	for {
+		if loop() {
+			os.Exit(0)
+		}
 	}
-	go func(start chan byte) {
-		<-start
-		go func() {
-			for {
-				setDesktop(randFile())
-				time.Sleep(time.Second * 3)
-			}
-		}()
-		go getInput(reader, quit)
-	}(done)
+}
 
-	<-quit
-}
-func getInput(r *bufio.Reader, qu chan byte) {
-	for true {
-		done := make(chan byte)
-		fmt.Print("\nGet new pictures? (Press q to quit): ")
-		s, _ := r.ReadString('\n')
-		ch := s[0]
-		if ch == 'q' || ch == 'Q' {
-			qu <- 0
-		} else if ch == 'y' || ch == 'Y' {
-			fmt.Print("Number of pages to scan: ")
-			s, _ := r.ReadString('\n')
-			i, err := strconv.Atoi(strings.TrimSpace(s))
-			if err != nil {
-				fmt.Printf("%T, %v", s, s)
-			}
-			go getPictures(i, done)
-			<-done
-		}
+func loop() bool {
+	s, err := getInput("Get new pictures? (Press q to quit): ")
+	check(err)
+	ch := s[0]
+	if ch == 'q' || ch == 'Q' {
+		return true
+	} else if ch == 'y' || ch == 'Y' {
+		scanPages()
 	}
+	return false
 }
-func getPictures(pages int, done chan byte) {
-	makeBase()
+
+func scanPages() {
+	s, err := getInput("Number of pages to scan: ")
+	check(err)
+	i, err := strconv.Atoi(strings.TrimSpace(s))
+	check(err)
+	getPictures(i)
+
+}
+
+func getPictures(pages int) {
+	var wg sync.WaitGroup
 	after := ""
 	count := 0
-	for pages > 0 {
+	wg.Add(pages)
+	for i := 0; i < pages; i++ {
 		res, err := talkToReddit(after)
-		if err != nil {
-			log.Fatal(err, "REDDIT")
-		}
-		body, _ := ioutil.ReadAll(res.Body)
+		check(err, "REDDIT")
+		body, err := ioutil.ReadAll(res.Body)
+		check(err)
 		str := string(body)
-		add := 0
-		for true {
-			var imgurl string
-			desktopIndex := strings.Index(str[add:], "\"link_flair_text\": \"Desktop\"")
-			if desktopIndex == -1 {
-				break
-			} else {
-				add += desktopIndex
-			}
-			fromRe := regexp.MustCompile("https://i\\.imgur\\.com/[A-z0-9]+(\\.jpg|\\.png)|https://i\\.redd\\.it/[A-z0-9]+(\\.jpg|.png)")
-			from := fromRe.FindStringIndex(str[add:])
-
-			if from[0] == -1 {
-				break
-			}
-			imgurl = str[from[0]+add : from[1]+add]
-			go func() {
-				defer wg.Done()
-				if convertLinkToImg(imgurl) != nil {
-					count++
-				}
-			}()
-			wg.Add(1)
-			add += from[1]
+		numAdded := make(chan int)
+		go func() {
+			defer wg.Done()
+			parsePage(str, numAdded)
+		}()
+		for i := range numAdded {
+			count += i
 		}
-
-		pages--
-		if pages > 0 {
+		if i+1 < pages {
 			afterIndex := strings.Index(str, "after") + 5 + 4
 			after = str[afterIndex : strings.Index(str[afterIndex:], "\"")+afterIndex]
 		}
+
 	}
 
 	wg.Wait()
 	fmt.Println("Added", count, "files!")
 	time.Sleep(time.Second)
-	done <- 0
 }
+
+func parsePage(pageString string, imagesAdded chan<- int) {
+	count := 0
+	add := 0
+	var wg sync.WaitGroup
+	for {
+		desktopIndex := strings.Index(pageString[add:], "\"link_flair_text\": \"Desktop\"")
+
+		if desktopIndex == -1 {
+			break
+		}
+
+		add += desktopIndex
+		fromRe := regexp.MustCompile("https://i\\.imgur\\.com/[A-z0-9]+(\\.jpg|\\.png)|https://i\\.redd\\.it/[A-z0-9]+(\\.jpg|.png)")
+		from := fromRe.FindStringIndex(pageString[add:])
+		if from[0] == -1 {
+			break
+		}
+		wg.Add(1)
+		go func(from []int, add int) {
+			defer wg.Done()
+			var imgurl string
+
+			imgurl = pageString[from[0]+add : from[1]+add]
+			if convertLinkToImg(imgurl) != nil {
+				count++
+			}
+		}(from, add)
+
+		add += from[1]
+
+	}
+	wg.Wait()
+	imagesAdded <- count
+	close(imagesAdded)
+}
+
 func convertLinkToImg(imgurl string) error {
 	var p string
+
 	from := regexp.MustCompile("(\\.com/)|(\\.it/)").FindStringIndex(imgurl)
 	p = path.Join(basePath, imgurl[from[1]+1:])
 	if _, ferr := os.Stat(p); os.IsNotExist(ferr) {
 		res, err := http.Get(imgurl)
-		if err != nil {
-			log.Fatal(err, "IMGUR")
-		}
+		check(err, "IMGUR")
 		defer res.Body.Close()
 		file, err := os.Create(p)
 		defer file.Close()
-		if err != nil {
-			log.Fatal(err)
-		}
+		check(err)
+
 		io.Copy(file, res.Body)
 		res.Body.Close()
 		fmt.Println("Adding:", imgurl)
@@ -157,11 +171,13 @@ func convertLinkToImg(imgurl string) error {
 	}
 	return nil
 }
+
 func makeBase() {
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
 		os.Mkdir(basePath, os.ModeDir)
 	}
 }
+
 func talkToReddit(after string) (*http.Response, error) {
 	client := http.Client{}
 	link := redditURL
@@ -169,10 +185,11 @@ func talkToReddit(after string) (*http.Response, error) {
 		link += "&" + "after=" + after
 	}
 	req, _ := http.NewRequest("GET", link, nil)
-	req.Header.Set("User-Agent", "Wallpaper-bot-0.1")
+	req.Header.Set("User-Agent", "Wallpaper-bot-0.2")
 	return client.Do(req)
 
 }
+
 func setDesktop(file string) {
 	file = path.Join(workingPath, basePath, file)
 	fileptr, err := syscall.UTF16PtrFromString(file)
@@ -189,6 +206,7 @@ func setDesktop(file string) {
 	}()
 
 }
+
 func randFile() string {
 	files, _ := ioutil.ReadDir(basePath)
 	if len(files) == 0 {
@@ -197,4 +215,18 @@ func randFile() string {
 	}
 	ran := rand.Intn(len(files))
 	return files[ran].Name()
+}
+
+func getInput(output string) (string, error) {
+	fmt.Print(output)
+	return console.ReadString('\n')
+}
+
+func check(err error, outs ...string) {
+	if err != nil {
+		for _, s := range outs {
+			log.Println(s)
+		}
+		log.Fatal(err)
+	}
 }
