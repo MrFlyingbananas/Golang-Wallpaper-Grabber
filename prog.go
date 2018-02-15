@@ -99,10 +99,11 @@ func getPictures(pages int) {
 		go func() {
 			defer wg.Done()
 			parsePage(str, numAdded)
+			for i := range numAdded {
+				count += i
+			}
 		}()
-		for i := range numAdded {
-			count += i
-		}
+
 		if i+1 < pages {
 			afterIndex := strings.Index(str, "after") + 5 + 4
 			after = str[afterIndex : strings.Index(str[afterIndex:], "\"")+afterIndex]
